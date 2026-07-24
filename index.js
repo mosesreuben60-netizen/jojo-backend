@@ -1,0 +1,48 @@
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+const connectDB = require("./src/db");
+
+const authRoutes = require("./src/routes/auth");
+const bookingRoutes = require("./src/routes/bookings");
+const availabilityRoutes = require("./src/routes/availability");
+const paymentRoutes = require("./src/routes/payments");
+
+const app = express();
+
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map(o => o.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (curl, server-to-server) and any whitelisted origin
+    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    callback(new Error("Not allowed by CORS"));
+  }
+}));
+app.use(express.json());
+
+app.get("/", (req, res) => res.json({ status: "JoJo Delivery API is running" }));
+app.get("/health", (req, res) => res.json({ ok: true }));
+
+app.use("/api/auth", authRoutes);
+app.use("/api/bookings", bookingRoutes);
+app.use("/api/availability", availabilityRoutes);
+app.use("/api/payments", paymentRoutes);
+
+app.use((req, res) => res.status(404).json({ error: "Not found" }));
+
+const PORT = process.env.PORT || 3000;
+
+connectDB()
+  .then(() => {
+    app.listen(PORT, () => console.log(`JoJo Delivery API listening on port ${PORT}`));
+  })
+  .catch(err => {
+    console.error("Failed to connect to MongoDB:", err.message);
+    process.exit(1);
+  });
