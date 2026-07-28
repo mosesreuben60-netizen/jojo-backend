@@ -1,90 +1,114 @@
 const express = require("express");
-const Booking = require("../models/Booking");
-const requireAuth = require("../middleware/auth");
-const { findTier } = require("../tiers");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const Driver = require("../models/Driver");
+const { requireDriverAuth } = require("../middleware/auth");
 
 const router = express.Router();
 
-function generateTrackingCode() {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let code = "";
-  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
-  return `RR-${code}`;
+function issueToken(driver) {
+  return jwt.sign({ id: driver._id, email: driver.email, role: "driver" }, process.env.JWT_SECRET, { expiresIn: "30d" });
 }
 
-async function uniqueTrackingCode() {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const code = generateTrackingCode();
-    const exists = await Booking.exists({ trackingCode: code });
-    if (!exists) return code;
-  }
-  throw new Error("Could not generate a unique tracking code, try again");
-}
-
-router.post("/", async (req, res) => {
+// POST /api/drivers/signup — public
+router.post("/signup", async (req, res) => {
   try {
-    const { customerName, customerPhone, pickupAddress, dropoffAddress, packageNote, tierId } = req.body;
+    const { name, email, password, phone, licenseNumber, bankName, bankAccountNumber, bikeTrackerNumber } = req.body;
 
-    if (!customerName || !customerPhone || !pickupAddress || !dropoffAddress || !tierId) {
+    if (!name || !email || !password || !phone || !licenseNumber || !bankName || !bankAccountNumber) {
       return res.status(400).json({ error: "Missing required fields" });
     }
+    if (password.length < 8) {
+      return res.status(400).json({ error: "Password must be at least 8 characters" });
+    }
 
-    const tier = findTier(tierId);
-    if (!tier) return res.status(400).json({ error: "Unknown delivery tier" });
+    const existing = await Driver.findOne({ email: email.toLowerCase().trim() });
+    if (existing) return res.status(409).json({ error: "An account with that email already exists" });
 
-    const trackingCode = await uniqueTrackingCode();
+    const passwordHash = await bcrypt.hash(password, 10);
 
-    const booking = await Booking.create({
-      customerName,
-      customerPhone,
-      pickupAddress,
-      dropoffAddress,
-      packageNote: packageNote || "",
-      tierId: tier.id,
-      tierLabel: tier.label,
-      price: tier.price,
-      trackingCode,
-      status: "pending",
-      paymentStatus: "unpaid"
+    const driver = await Driver.create({
+      name, email, phone, licenseNumber, bankName, bankAccountNumber,
+      bikeTrackerNumber: bikeTrackerNumber || "",
+      passwordHash
     });
 
-    res.status(201).json(booking);
+    const token = issueToken(driver);
+    res.status(201).json({ token, driver: driver.toPublicJSON() });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Could not create booking" });
+    res.status(500).json({ error: "Could not create account" });
   }
 });
 
-router.get("/code/:code", async (req, res) => {
+// POST /api/drivers/login — public
+router.post("/login", async (req, res) => {
   try {
-    const booking = await Booking.findOne({ trackingCode: req.params.code.trim().toUpperCase() });
-    if (!booking) return res.status(404).json({ error: "No booking found for that code" });
-    res.json(booking);
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: "Email and password are required" });
+
+    const driver = await Driver.findOne({ email: email.toLowerCase().trim() });
+    if (!driver) return res.status(401).json({ error: "Incorrect email or password" });
+
+    const matches = await bcrypt.compare(password, driver.passwordHash);
+    if (!matches) return res.status(401).json({ error: "Incorrect email or password" });
+
+    const token = issueToken(driver);
+    res.json({ token, driver: driver.toPublicJSON() });
   } catch (err) {
-    res.status(500).json({ error: "Lookup failed" });
+    res.status(500).json({ error: "Login failed" });
   }
 });
 
-router.get("/", requireAuth, async (req, res) => {
-  try {
-    const bookings = await Booking.find().sort({ createdAt: -1 }).limit(200);
-    res.json(bookings);
-  } catch (err) {
-    res.status(500).json({ error: "Could not load bookings" });
-  }
+// GET /api/drivers/me — auth required
+router.get("/me", requireDriverAuth, async (req, res) => {
+  const driver = await Driver.findById(req.driver.id);
+  if (!driver) return res.status(404).json({ error: "Driver not found" });
+  res.json(driver.toPublicJSON());
 });
 
-router.patch("/:id/status", requireAuth, async (req, res) => {
+// PATCH /api/drivers/me/online — auth required, toggle online/offline
+router.patch("/me/online", requireDriverAuth, async (req, res) => {
   try {
-    const { status } = req.body;
-    if (!Booking.STATUS_VALUES.includes(status)) {
-      return res.status(400).json({ error: "Invalid status" });
-    }
-    const booking = await Booking.findByIdAndUpdate(req.params.id, { status }, { new: true });
-    if (!booking) return res.status(404).json({ error: "Booking not found" });
-    res.json(booking);
+    const { isOnline } = req.body;
+    const driver = await Driver.findByIdAndUpdate(
+      req.driver.id,
+      { isOnline: !!isOnline },
+      { new: true }
+    );
+    if (!driver) return res.status(404).json({ error: "Driver not found" });
+    res.json(driver.toPublicJSON());
   } catch (err) {
     res.status(500).json({ error: "Could not update status" });
+  }
+});
+
+// PATCH /api/drivers/me/location — auth required, called repeatedly from the driver's phone while online
+router.patch("/me/location", requireDriverAuth, async (req, res) => {
+  try {
+    const { lat, lng } = req.body;
+    if (typeof lat !== "number" || typeof lng !== "number") {
+      return res.status(400).json({ error: "lat and lng must be numbers" });
+    }
+    const driver = await Driver.findByIdAndUpdate(
+      req.driver.id,
+      { lastLocation: { lat, lng, updatedAt: new Date() } },
+      { new: true }
+    );
+    if (!driver) return res.status(404).json({ error: "Driver not found" });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Could not update location" });
+  }
+});
+
+// GET /api/drivers/available-count — public, used by the booking page's status chip
+router.get("/available-count", async (req, res) => {
+  try {
+    const count = await Driver.countDocuments({ isOnline: true });
+    res.json({ availableCount: count, isAvailable: count > 0 });
+  } catch (err) {
+    res.status(500).json({ error: "Could not check availability" });
   }
 });
 
