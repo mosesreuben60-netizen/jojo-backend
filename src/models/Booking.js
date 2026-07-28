@@ -16,7 +16,9 @@ const bookingSchema = new mongoose.Schema(
     price: { type: Number, required: true },
     status: { type: String, enum: STATUS_VALUES, default: "pending" },
     paymentStatus: { type: String, enum: PAYMENT_STATUS_VALUES, default: "unpaid" },
-    paymentReference: { type: String, default: null }
+    paymentReference: { type: String, default: null },
+    driverId: { type: mongoose.Schema.Types.ObjectId, ref: "Driver", default: null },
+    customerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", default: null }
   },
   { timestamps: true }
 );
