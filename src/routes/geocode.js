@@ -43,4 +43,29 @@ router.get("/", async (req, res) => {
   }
 });
 
+// GET /api/geocode/reverse?lat=...&lng=... — public. Turns GPS coordinates
+// into a human-readable address, used by the "use my current location"
+// button on the booking form.
+router.get("/reverse", async (req, res) => {
+  try {
+    const { lat, lng } = req.query;
+    if (!lat || !lng) return res.status(400).json({ error: "lat and lng query params are required" });
+
+    const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}`;
+    const response = await throttledFetch(url, {
+      headers: { "User-Agent": "JoJoActiveLogistics/1.0 (delivery booking app)" }
+    });
+
+    if (!response.ok) return res.status(502).json({ error: "Reverse geocoding service unavailable" });
+
+    const result = await response.json();
+    if (!result || !result.display_name) return res.json({ found: false });
+
+    res.json({ found: true, address: result.display_name });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Reverse geocoding failed" });
+  }
+});
+
 module.exports = router;
