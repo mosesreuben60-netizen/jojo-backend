@@ -15,7 +15,7 @@ router.post("/signup", async (req, res) => {
   try {
     const { name, email, password, phone, licenseNumber, bankName, bankAccountNumber, bikeTrackerNumber } = req.body;
 
-    if (!name || !email || !password || !phone || !licenseNumber || !bankName || !bankAccountNumber) {
+    if (!name || !email || !password || !phone || !bankName || !bankAccountNumber) {
       return res.status(400).json({ error: "Missing required fields" });
     }
     if (password.length < 8) {
@@ -28,7 +28,8 @@ router.post("/signup", async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 10);
 
     const driver = await Driver.create({
-      name, email, phone, licenseNumber, bankName, bankAccountNumber,
+      name, email, phone, bankName, bankAccountNumber,
+      licenseNumber: licenseNumber || "",
       bikeTrackerNumber: bikeTrackerNumber || "",
       passwordHash
     });
